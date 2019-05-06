@@ -332,7 +332,7 @@ public class GraphQLJpaSchemaBuilder implements GraphQLSchemaBuilder {
                 .collect(Collectors.toList())
             )
             .fields(managedType.getAttributes().stream()
-                .filter(this::isValidAssociation)    
+                .filter(Attribute::isAssociation)    
                 .filter(this::isNotIgnored)
                 .filter(this::isNotIgnoredFilter)
                 .map(this::getWhereInputRelationField)
