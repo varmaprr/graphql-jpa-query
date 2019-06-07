@@ -1039,9 +1039,9 @@ public class StarwarsQueryExecutorTests {
                 +   "}"
                 + "}, "
                 + "friends=["
-                +   "{name=Leia Organa}, "
                 +   "{name=C-3PO}, "
                 +   "{name=Han Solo}, "
+                +   "{name=Leia Organa}, "
                 +   "{name=R2-D2}"
                 + "]}"
                 + "]}}";

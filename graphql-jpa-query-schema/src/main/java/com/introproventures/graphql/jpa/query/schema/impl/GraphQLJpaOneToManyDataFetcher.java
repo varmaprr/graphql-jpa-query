@@ -46,7 +46,6 @@ import graphql.schema.DataFetchingEnvironment;
  */
 class GraphQLJpaOneToManyDataFetcher extends GraphQLJpaQueryDataFetcher {
     
-    protected static final String OPTIONAL = "optional";
     private final PluralAttribute<Object,Object,Object> attribute;
 
     public GraphQLJpaOneToManyDataFetcher(EntityManager entityManager, 
