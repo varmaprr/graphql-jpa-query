@@ -1,4 +1,5 @@
 -- Json entity
+
 insert into json_entity (id, first_name, last_name, attributes) values
 	(1, 'john', 'doe', '{"attr":{"key":["1","2","3","4","5"]}}'),
 	(2, 'joe', 'smith', '{"attr":["1","2","3","4","5"]}');
