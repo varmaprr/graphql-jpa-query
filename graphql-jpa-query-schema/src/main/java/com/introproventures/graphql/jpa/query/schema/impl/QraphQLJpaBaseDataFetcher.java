@@ -93,6 +93,8 @@ import graphql.util.TraverserContext;
  */
 class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
 
+    private static final String WHERE = "where";
+
     protected static final String OPTIONAL = "optional";
     
     protected static final List<String> ARGUMENTS = Arrays.asList(OPTIONAL);
@@ -132,11 +134,7 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
         from.alias(from.getModel().getName());
 
         // Build predicates from query arguments
-        List<Predicate> predicates =  getFieldArguments(field, query, cb, from, environment)
-            .stream()
-            .map(it -> getPredicate(cb, from, from, environment, it))
-            .filter(it -> it != null)
-            .collect(Collectors.toList());
+        List<Predicate> predicates =  getFieldPredicates(field, query, cb,from, from, environment);
 
         // Use AND clause to filter results
         if(!predicates.isEmpty())
@@ -148,9 +146,10 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
         return entityManager.createQuery(query.distinct(isDistinct));
     }
 
-    protected final List<Argument> getFieldArguments(Field field, CriteriaQuery<?> query, CriteriaBuilder cb, From<?,?> from, DataFetchingEnvironment environment) {
+    protected final List<Predicate> getFieldPredicates(Field field, CriteriaQuery<?> query, CriteriaBuilder cb, Root<?> root, From<?,?> from, DataFetchingEnvironment environment) {
 
         List<Argument> arguments = new ArrayList<>();
+        List<Predicate> predicates = new ArrayList<>();
 
         // Loop through all of the fields being requested
         field.getSelectionSet().getSelections().forEach(selection -> {
@@ -163,6 +162,8 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
                     Path<?> fieldPath = from.get(selectedField.getName());
                     From<?,?> fetch = null;
                     Optional<Argument> optionalArgument = getArgument(selectedField, OPTIONAL);
+                    Optional<Argument> whereArgument = getArgument(selectedField, WHERE);
+                    Boolean isOptional = null;
 
                     // Build predicate arguments for singular attributes only
                     if(fieldPath.getModel() instanceof SingularAttribute) {
@@ -178,32 +179,32 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
                                 query.orderBy(cb.asc(fieldPath));
                         }
 
-                        // Process where arguments clauses.
-                        arguments.addAll(selectedField.getArguments()
-                            .stream()
-                            .filter(it -> !isOrderByArgument(it) && !isOptionalArgument(it))
-                            .map(it -> new Argument(selectedField.getName() + "." + it.getName(), it.getValue()))
-                            .collect(Collectors.toList()));
-
                         // Check if it's an object and the foreign side is One.  Then we can eagerly join causing an inner join instead of 2 queries
-                        if (fieldPath.getModel() instanceof SingularAttribute) {
-                            SingularAttribute<?,?> attribute = (SingularAttribute<?,?>) fieldPath.getModel();
-                            if (attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.MANY_TO_ONE
-                                || attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.ONE_TO_ONE
-                            ) {
-                               // Let's do fugly conversion 
-                               Boolean isOptional = optionalArgument.map(it -> getArgumentValue(environment, it, Boolean.class))
-                                                                    .orElse(attribute.isOptional());
+                        SingularAttribute<?,?> attribute = (SingularAttribute<?,?>) fieldPath.getModel();
+                        if (attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.MANY_TO_ONE
+                            || attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.ONE_TO_ONE
+                        ) {
+                           // Let's do fugly conversion 
+                           isOptional = optionalArgument.map(it -> getArgumentValue(environment, it, Boolean.class))
+                                                                .orElse(attribute.isOptional());
 
-                               // Let's apply left outer join to retrieve optional associations
-                               fetch = reuseFetch(from, selectedField.getName(), isOptional);
-                            }
+                           // Let's apply left outer join to retrieve optional associations
+                           fetch = reuseFetch(from, selectedField.getName(), isOptional);
+                        } else if(attribute.getPersistentAttributeType() == PersistentAttributeType.EMBEDDED) {
+                            // Process where arguments clauses.
+                            arguments.addAll(selectedField.getArguments()
+                                                          .stream()
+                                                          .filter(it -> !isOrderByArgument(it) && !isOptionalArgument(it))
+                                                          .map(it -> new Argument(selectedField.getName() + "." + it.getName(),
+                                                                                  it.getValue()))
+                                                          .collect(Collectors.toList()));
+                                
                         }
                     } else {
                         // We must add plural attributes with explicit join fetch 
                         // Let's do fugly conversion 
                         // the many end is a collection, and it is always optional by default (empty collection)
-                        Boolean isOptional = optionalArgument.map(it -> getArgumentValue(environment, it, Boolean.class))
+                        isOptional = optionalArgument.map(it -> getArgumentValue(environment, it, Boolean.class))
                                                              .orElse(toManyDefaultOptional);
 
                         // Let's apply join to retrieve associated collection
@@ -221,7 +222,7 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
                     }
                     // Let's build join fetch graph to avoid Hibernate error: 
                     // "query specified join fetching, but the owner of the fetched association was not present in the select list"
-                    if(fetch != null && selectedField.getSelectionSet() != null) {
+                    if(selectedField.getSelectionSet() != null && fetch != null) {
                         GraphQLFieldDefinition fieldDefinition = getFieldDef(environment.getGraphQLSchema(),
                                                                              this.getObjectType(environment),
                                                                              selectedField);  
@@ -230,16 +231,21 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
                         DataFetchingEnvironment fieldEnvironment = wherePredicateEnvironment(environment, 
                                                                                              fieldDefinition, 
                                                                                              args);
-                        // TODO nested where criteria expressions
-                        getFieldArguments(selectedField, query, cb, fetch, fieldEnvironment);
+                        predicates.addAll(getFieldPredicates(selectedField, query, cb, root, fetch, fieldEnvironment));
                     }
                 }
             }
         });
-
+        
         arguments.addAll(field.getArguments());
 
-        return arguments;
+        arguments.stream()
+                 .filter(it -> !isOrderByArgument(it) && !isOptionalArgument(it))
+                 .map(it -> getPredicate(cb, root, from, environment, it))
+                 .filter(it -> it != null)
+                 .forEach(predicates::add);
+
+        return predicates;
     }
 
     /**
@@ -337,7 +343,7 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
                 String fieldName = argument.getName().split("\\.")[0];
 
                 From<?,?> join = getCompoundJoin(path, argument.getName(), true);
-                Argument where = new Argument("where",  argument.getValue());
+                Argument where = new Argument(WHERE,  argument.getValue());
                 Map<String, Object> variables = environment.getExecutionContext().getVariables();
 
                 GraphQLFieldDefinition fieldDef = getFieldDef(
@@ -348,7 +354,7 @@ class QraphQLJpaBaseDataFetcher implements DataFetcher<Object> {
 
                 Map<String, Object> arguments = (Map<String, Object>) new ValuesResolver()
                     .getArgumentValues(fieldDef.getArguments(), Collections.singletonList(where), variables)
-                    .get("where");
+                    .get(WHERE);
 
                 return getWherePredicate(cb, from, join, wherePredicateEnvironment(environment, fieldDef, arguments), where);
             }
